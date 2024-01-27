@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Simple Two-User Chat App with AI</title>
+<!-- Include Firebase library -->
+<script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-functions-compat.js"></script>
+<style>
+  /* Add your styles here */
+  #messages {
+    height: 200px;
+    overflow-y: scroll;
+    border: 1px solid #ccc;
+    padding: 5px;
+    margin-bottom: 10px;
+  }
+  #message-input {
+    width: 100%;
+    margin-bottom: 10px;
+  }
+  #text-upload-container {
+    margin-bottom: 10px;
+  }
+  #uploaded-text {
+    white-space: pre-wrap; /* Since text files preserve line breaks */
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+    padding: 5px;
+    margin-bottom: 10px;
+    height: 200px;
+    overflow-y: scroll;
+  }
+  .highlight {
+    background-color: yellow;
+  }
+  /* Style for AI messages */
+  .ai-message {
+    color: blue;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+<div id="chat-container">
+  <input type="text" id="username" placeholder="Enter your name" required>
+  <div id="text-upload-container">
+    <input type="file" id="text-upload" accept=".txt" onchange="loadTextFile()">
+    <input type="search" id="search-text" placeholder="Search text" oninput="searchText()">
+  </div>
+  <div id="uploaded-text"></div>
+  <textarea id="message-input" rows="4" placeholder="Type a message" required></textarea>
+  <button onclick="sendMessage()">Send</button>
+  <div id="messages"></div>
+</div>
+
+<script>
+// Your web app's Firebase configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyDjoJLs5aBD6STfreiO09ciYbIC-zcHACg",
+  authDomain: "chatassist-3a97b.firebaseapp.com",
+  projectId: "chatassist-3a97b",
+  storageBucket: "chatassist-3a97b.appspot.com",
+  messagingSenderId: "604892006338",
+  appId: "1:604892006338:web:933b8f8ea78389defe385b",
+  measurementId: "G-SLR0WFQPPS"
+};
+
+// Initialize Firebase
+const app = firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+let userName = '';
+let sharedTextContent = ''; // Variable to store shared text content
+
+document.getElementById('username').addEventListener('change', function() {
+  userName = this.value;
+});
+
+// Function to send message
+function sendMessage() {
+  const messageInput = document.getElementById('message-input');
+  const message = messageInput.value.trim();
+  if (message && userName) {
+    db.collection("messages").add({
+      name: userName,
+      text: message,
+      timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    })
+    .then(() => {
+      messageInput.value = '';
+      // After sending a message, call AI to respond
+      generateAIResponse(sharedTextContent, message);
+    })
+    .catch((error) => {
+      console.error("Error writing message: ", error);
+    });
+  } else if (!userName) {
+    alert('Please enter your name.');
+  } else {
+    alert('Please type a message.');
+  }
+}
+
+// Function to load and display the text file and upload to Firestore
+function loadTextFile() {
+  const fileInput = document.getElementById('text-upload');
+  const file = fileInput.files[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      sharedTextContent = e.target.result; // Store the shared text content
+      document.getElementById('uploaded-text').textContent = sharedTextContent;
+      db.collection("shared-texts").doc("session1").set({
+        content: sharedTextContent,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+      })
+      .catch((error) => {
+        console.error("Error uploading text: ", error);
+      });
+    };
+    reader.readAsText(file);
+  }
+}
+
+// Function to search and highlight text
+function searchText() {
+  let text = document.getElementById('uploaded-text').textContent;
+  let searchQuery = document.getElementById('search-text').value;
+  const textContainer = document.getElementById('uploaded-text');
+  textContainer.innerHTML = text; // Remove previous highlights
+  searchQuery = searchQuery.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+  if (searchQuery) {
+    const pattern = new RegExp(`(${searchQuery})`, 'gi');
+    const newText = text.replace(pattern, '<span class="highlight">$1</span>');
+    textContainer.innerHTML = newText;
+  }
+}
+
+// Real-time listener for chat
+db.collection("messages").orderBy("timestamp")
+  .onSnapshot((querySnapshot) => {
+    const messagesContainer = document.getElementById('messages');
+    messagesContainer.innerHTML = ''; // Clear current messages
+    querySnapshot.forEach((doc) => {
+      const messageDiv = document.createElement('div');
+      messageDiv.textContent = `${doc.data().name}: ${doc.data().text}`;
+      messagesContainer.appendChild(messageDiv);
+    });
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  });
+
+// Real-time listener for shared text
+db.collection("shared-texts").doc("session1")
+  .onSnapshot((doc) => {
+    if (doc.exists) {
+      sharedTextContent = doc.data().content; // Update shared text content
+      const textContainer = document.getElementById('uploaded-text');
+      textContainer.textContent = sharedTextContent;
+      // Call the search function to reapply highlighting if there's a search term
+      searchText();
+    }
+  });
+
+// Function to generate AI response based on the last message and shared text
+function generateAIResponse(textContent, lastMessage) {
+  // Create a callable function reference
+  const callGenerateAIResponse = firebase.functions().httpsCallable('generateAIResponse');
+
+  // Call the function and pass the message and shared text content
+  callGenerateAIResponse({textContent: textContent, lastMessage: lastMessage})
+    .then((result) => {
+      // Read result of the Cloud Function and display the AI response
+      const aiResponse = result.data.aiResponse;
+      displayAIResponse(aiResponse);
+      // Write AI response to Firestore
+      return db.collection("messages").add({
+        name: 'AI',
+        text: aiResponse,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    })
+    .then(() => {
+      console.log("AI response written to Firestore");
+    })
+    .catch((error) => {
+      // Getting the Error details
+      const code = error.code;
+      const message = error.message;
+      const details = error.details;
+      console.error("Error generating or storing AI response: ", message);
+    });
+}
+
+// Function to display AI response in the chat
+function displayAIResponse(aiResponse) {
+  const messagesContainer = document.getElementById('messages');
+  // Create a div element for AI response
+  const messageDiv = document.createElement('div');
+  messageDiv.textContent = `AI: ${aiResponse}`;
+  messageDiv.classList.add('ai-message');
+  // Append the AI response to the messages container
+  messagesContainer.appendChild(messageDiv);
+  // Scroll to the latest message
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+</script>
+</body>
+</html>
